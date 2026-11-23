@@ -28,6 +28,11 @@ OUBLI_APRES_JOURS = 3
 BOOKMAKERS = {
     "Winamax": {
         "lien": "https://www.winamax.fr/paris-sportifs/sports/100000",
+        # Winamax n'affiche pas la mise max sur la page : les boosts à 10 € max
+        # sont ceux marqués « Grosse cote boostée ». On ne garde que ceux-là.
+        "etiquette": r"grosse\s*cote",
+        "mise_etiquette": 10.0,
+        "seulement_etiquette": True,
         "pages": [
             ("https://www.winamax.fr/paris-sportifs/sports/100000", True),
             ("https://www.winamax.fr/paris-sportifs", False),
@@ -74,6 +79,7 @@ def trouver_boosts(texte, page_boost):
     lignes = [l for l in lignes if l and not IGNORER.match(l)]
     boosts = []
     i = 0
+    fin_prec = 0  # fin du groupe de cotes précédent = début de la « carte » actuelle
     while i < len(lignes):
         if not COTE.match(lignes[i]):
             i += 1
@@ -84,6 +90,7 @@ def trouver_boosts(texte, page_boost):
         while i < len(lignes) and COTE.match(lignes[i]):
             cotes.append(nombre(COTE.match(lignes[i]).group(1)))
             i += 1
+        haut_carte, fin_prec = fin_prec, i
         fenetre = " ".join(lignes[max(0, debut - 8): min(len(lignes), i + 6)])
 
         if len(cotes) == 2 and cotes[0] < cotes[1] <= cotes[0] * 12:
@@ -122,7 +129,9 @@ def trouver_boosts(texte, page_boost):
             apres.append(l)
         m = MISE.search(" ".join(apres))
         mise = nombre(m.group(1)) if m else mise_avant
+        carte = " ".join(lignes[max(haut_carte, debut - 12):debut])
         boosts.append({
+            "carte": carte,
             "description": " · ".join(desc)[:200],
             "ancienne": ancienne,
             "cote": cote,
@@ -140,6 +149,9 @@ def lire_page(navigateur, url):
         user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
     )
+    # masque les signes les plus visibles d'un navigateur automatisé
+    ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+    ctx.set_extra_http_headers({"Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8"})
     page = ctx.new_page()
     statut, texte, erreur = None, "", None
     try:
@@ -218,7 +230,7 @@ def main():
     nouveaux = 0
 
     with sync_playwright() as p:
-        nav = p.chromium.launch()
+        nav = p.chromium.launch(args=["--disable-blink-features=AutomationControlled"])
         for bk, conf in BOOKMAKERS.items():
             trouves = {}
             details = []
@@ -234,19 +246,33 @@ def main():
                     extrait = texte[:1500].replace("```", "'''")
                     details.append(f"<details><summary>Texte lu sur la page</summary>\n\n```\n{extrait}\n```\n</details>")
 
-            gardes = []
+            gardes, ecartes = [], []
+            etiq = re.compile(conf["etiquette"], re.I) if conf.get("etiquette") else None
             for k, b in trouves.items():
+                if etiq:
+                    if etiq.search(b["carte"]):
+                        b["mise_max"] = b["mise_max"] or conf.get("mise_etiquette")
+                    elif conf.get("seulement_etiquette"):
+                        ecartes.append((b, "pas une « grosse cote boostée »"))
+                        continue
                 if b["mise_max"] is None and not GARDER_SI_MISE_INCONNUE:
+                    ecartes.append((b, "mise max inconnue"))
                     continue
                 if b["mise_max"] is not None and b["mise_max"] > MISE_MAX:
+                    ecartes.append((b, f"mise max {b['mise_max']:g} €"))
                     continue
                 gardes.append((k, b))
 
-            resume.append(f"## {bk} : {len(trouves)} boost(s) trouvé(s), {len(gardes)} à {MISE_MAX:g} € max ou mise inconnue")
+            resume.append(f"## {bk} : {len(trouves)} boost(s) trouvé(s), {len(gardes)} gardé(s)")
             resume.extend(details)
+            for b, raison in ecartes:
+                resume.append(f"  - ❌ {b['description']} : {b['cote']} (écarté : {raison})")
+            if etiq and trouves and not any(etiq.search(b["carte"]) for b in trouves.values()):
+                exemple = next(iter(trouves.values()))["carte"][:600].replace("```", "'''")
+                resume.append(f"<details><summary>Exemple de texte autour d'un boost</summary>\n\n```\n{exemple}\n```\n</details>")
             for k, b in gardes:
                 neuf = k not in vus
-                resume.append(f"  - {'🆕 ' if neuf else ''}{b['description']} : {b['ancienne'] or '?'} → {b['cote']} (mise max {b['mise_max'] if b['mise_max'] is not None else '?'})")
+                resume.append(f"  - ✅ {'🆕 ' if neuf else ''}{b['description']} : {b['ancienne'] or '?'} → {b['cote']} (mise max {b['mise_max'] if b['mise_max'] is not None else '?'})")
                 if neuf and not test:
                     try:
                         notifier(topic, bk, b, conf["lien"])
