@@ -35,13 +35,11 @@ BOOKMAKERS = {
         "seulement_etiquette": True,
         "pages": [
             ("https://www.winamax.fr/paris-sportifs/sports/100000", True),
-            ("https://www.winamax.fr/paris-sportifs", False),
         ],
     },
     "Betclic": {
         "lien": "https://www.betclic.fr/",
         "pages": [
-            ("https://www.betclic.fr/cotes-boostees", True),
             ("https://www.betclic.fr/", False),
         ],
     },
@@ -146,12 +144,7 @@ def lire_page(navigateur, url):
         locale="fr-FR",
         timezone_id="Europe/Paris",
         viewport={"width": 1280, "height": 2000},
-        user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"),
     )
-    # masque les signes les plus visibles d'un navigateur automatisé
-    ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-    ctx.set_extra_http_headers({"Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8"})
     page = ctx.new_page()
     statut, texte, erreur = None, "", None
     try:
@@ -230,7 +223,7 @@ def main():
     nouveaux = 0
 
     with sync_playwright() as p:
-        nav = p.chromium.launch(args=["--disable-blink-features=AutomationControlled"])
+        nav = p.chromium.launch()
         for bk, conf in BOOKMAKERS.items():
             trouves = {}
             details = []
