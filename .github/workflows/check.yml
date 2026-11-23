@@ -1,0 +1,48 @@
+name: Vérifier les cotes boostées
+
+on:
+  workflow_dispatch:          # déclenché par cron-job.org toutes les 10 min (ou à la main)
+  schedule:
+    - cron: "*/30 * * * *"    # secours si cron-job.org tombe en panne
+
+permissions:
+  contents: write             # pour sauvegarder la mémoire (seen.json)
+
+concurrency:
+  group: verifier-boosts
+  cancel-in-progress: false
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Installer les outils
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Vérifier les 3 bookmakers
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python check.py
+
+      - name: Sauvegarder la mémoire
+        if: always()
+        run: |
+          [ -f seen.json ] || exit 0
+          git config user.name "boost-bot"
+          git config user.email "boost-bot@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Boosts déjà envoyés"
+          git pull --rebase origin main && git push origin main
